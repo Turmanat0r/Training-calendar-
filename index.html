@@ -174,7 +174,7 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
   <header class="top">
     <div class="brand">
       <h1>2027 Training Calendar</h1>
-      <p>Course dates from the whiteboard. Click a day to add, click a course to edit. Changes save in this browser.</p>
+      <p>Course dates from the whiteboard. Click a day to add, click a course to edit. Synced across all your devices.</p>
     </div>
     <div class="status" id="status"><span class="dot" id="sdot"></span><span id="stext">Connecting…</span></div>
   </header>
@@ -213,6 +213,16 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
     </aside>
   </div>
 </div>
+
+<dialog id="pwDlg">
+  <form id="pwForm" autocomplete="off">
+    <h2>Enter passcode</h2>
+    <p style="margin:0;color:var(--muted);font-size:14px">Changing the calendar needs the passcode. This device will remember it.</p>
+    <div class="fld"><label for="pwInput">Passcode</label><input id="pwInput" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <p class="ferr" id="pwErr"></p>
+    <div class="acts"><span></span><div class="r"><button class="btn" type="button" id="pwCancel">Cancel</button><button class="btn primary" type="submit">Unlock</button></div></div>
+  </form>
+</dialog>
 
 <dialog id="dlg">
   <form id="evForm" method="dialog">
@@ -490,9 +500,10 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
 
   function errMsg(err){
     const c = err && err.code;
-    if (c==="invalid_argument") return "You don't have permission to change this calendar. Ask the owner for Contributor access.";
-    if (c==="quota_exceeded") return "The calendar is full. Delete some old courses and try again.";
-    return "Couldn't save right now. Check your connection and try again.";
+    if (c==="cancelled") return "Not saved. A passcode is needed to change the calendar.";
+    if (c==="passcode") return "That passcode didn't work, so nothing was changed.";
+    if (c==="offline") return "You're offline. Reconnect and try again.";
+    return "Couldn't save right now. Try again in a moment.";
   }
 
   function jumpTo(s){ const d = parse(s); cursor = new Date(d.getFullYear(), view==="year"?0:d.getMonth(), 1); render(); }
@@ -535,30 +546,75 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
   // ---------- data layer ----------
   function startRender(list){ events = list; if (!loaded){ loaded = true; const up = sorted().find(e=>e.end>=todayISO); if (up) cursor = new Date(parse(up.start).getFullYear(), view==="year"?0:parse(up.start).getMonth(), 1); } render(); }
 
-  const SEED = [
-    ["MPAT","2027-01-04","2027-01-05"],["FTO","2027-01-18","2027-01-19"],["DT","2027-01-25","2027-01-29"],
-    ["FLS","2027-02-08","2027-02-12"],["Ins Dev","2027-03-08","2027-03-12"],["MPAT","2027-04-06","2027-04-07"],
-    ["Firearms","2027-04-26","2027-04-30"],["LEQ","2027-04-26","2027-04-30"],["DT","2027-04-26","2027-04-30"],
-    ["SFST","2027-05-03","2027-05-07"],["Ins Dev","2027-05-10","2027-05-14"],["FLS","2027-05-31","2027-06-04"],
-    ["Ins Dev","2027-08-09","2027-08-13"],["MPAT","2027-08-16","2027-08-17"],["LEQ","2027-08-16","2027-08-20"],
-    ["SFST","2027-08-23","2027-08-27"],["FLS","2027-09-06","2027-09-10"],["Firearms","2027-09-06","2027-09-10"],
-    ["DT","2027-09-06","2027-09-10"],["Coroner CE","2027-12-01","2027-12-03"],["Basic Coroner","2027-12-06","2027-12-10"],
-  ].map(([title,start,end],i) => ({ id:"s"+i, title, start, end, notes:"" }));
+  const API = "https://hcoiwhdvecbsvkpanvkc.supabase.co/rest/v1";
+  const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhjb2l3aGR2ZWNic3ZrcGFudmtjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MTc2MTUsImV4cCI6MjEwNjA5MzYxNX0.K6QVpCPSgNM3zD1h8iCrj4dGUrViCpHefNRibSFm5uQ";
+  const HDR = { apikey: KEY, Authorization: "Bearer " + KEY, "Content-Type": "application/json" };
+  const CACHE = "tc.cache", PASS = "tc.passcode";
+  const lsGet = k => { try { return localStorage.getItem(k); } catch(e){ return null; } };
+  const lsSet = (k,v) => { try { v===null ? localStorage.removeItem(k) : localStorage.setItem(k,v); } catch(e){} };
+  const fromRow = r => ({ id: r.id, title: r.title, start: r.start_date, end: r.end_date, notes: r.notes || "" });
 
-  function localStore(){
-    const K = "tc.events";
-    const read = () => { try { const v = localStorage.getItem(K); return v===null ? SEED : JSON.parse(v); } catch(e){ return SEED; } };
-    const write = l => { try { localStorage.setItem(K, JSON.stringify(l)); } catch(e){} startRender(l); };
-    startRender(read());
-    return {
-      add: async d => write([...read(), {...d, id: "l"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}]),
-      save: async (id,d) => write(read().map(e => e.id===id ? {...d,id} : e)),
-      remove: async id => write(read().filter(e => e.id!==id)),
-    };
+  async function api(path, opts){
+    let res;
+    try { res = await fetch(API + path, { ...opts, headers: HDR, cache: "no-store" }); }
+    catch(e){ throw { code: "offline" }; }
+    if (!res.ok){
+      let body = {}; try { body = await res.json(); } catch(e){}
+      if (body.code === "28P01" || /passcode/.test(body.message||"")) throw { code: "passcode" };
+      throw { code: "server", status: res.status, message: body.message };
+    }
+    return res.status === 204 ? null : res.json().catch(()=>null);
   }
 
+  let lastSig = "";
+  async function refresh(){
+    try {
+      const rows = await api("/training_events?select=id,title,start_date,end_date,notes&order=start_date");
+      const list = rows.map(fromRow), sig = JSON.stringify(list);
+      lsSet(CACHE, sig);
+      setStatus("live", "Synced " + new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}));
+      if (sig !== lastSig || !loaded){ lastSig = sig; startRender(list); }
+    } catch(e){
+      setStatus("warn", e.code==="offline" ? "Offline. Showing the last synced copy." : "Can't reach the calendar right now. Showing the last synced copy.");
+      if (!loaded){ let c = []; try { c = JSON.parse(lsGet(CACHE)||"[]"); } catch(x){} startRender(c); }
+    }
+  }
+
+  // passcode prompt (asked once per device)
+  function askPasscode(wrong){
+    return new Promise(resolve => {
+      const d = $("#pwDlg");
+      $("#pwErr").textContent = wrong ? "That passcode didn't work. Check it and try again." : "";
+      $("#pwInput").value = "";
+      d.showModal(); $("#pwInput").focus();
+      const done = v => { $("#pwForm").onsubmit = null; $("#pwCancel").onclick = null; d.close(); resolve(v); };
+      $("#pwForm").onsubmit = e => { e.preventDefault(); const v = $("#pwInput").value.trim(); if (v) done(v); };
+      $("#pwCancel").onclick = () => done(null);
+    });
+  }
+  async function withPass(fn){
+    let pass = lsGet(PASS), wrong = false;
+    for (let i=0; i<3; i++){
+      if (!pass){ pass = await askPasscode(wrong); if (!pass) throw { code: "cancelled" }; }
+      try { const r = await fn(pass); lsSet(PASS, pass); return r; }
+      catch(e){ if (e.code !== "passcode") throw e; lsSet(PASS, null); pass = null; wrong = true; }
+    }
+    throw { code: "passcode" };
+  }
+  const rpc = (name, body) => api("/rpc/" + name, { method: "POST", body: JSON.stringify(body) });
+  const saveRow = (id, d) => withPass(p => rpc("training_save_event", { p_passcode: p, p_id: id, p_title: d.title, p_start: d.start, p_end: d.end, p_notes: d.notes || "" }));
+
+  store = {
+    add: async d => { await saveRow(null, d); await refresh(); },
+    save: async (id, d) => { await saveRow(id, d); await refresh(); },
+    remove: async id => { await withPass(p => rpc("training_delete_event", { p_passcode: p, p_id: id })); await refresh(); },
+  };
+
   render();
-  store = localStore(); setStatus("live","Saved in this browser");
+  setStatus("", "Loading…");
+  refresh();
+  setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
   { const b = $("#exportBtn"); b.hidden = false;
     b.onclick = () => {
       if (!events.length){ hint("Add a course before exporting.","err"); return; }
