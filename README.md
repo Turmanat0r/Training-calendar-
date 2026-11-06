@@ -1,4 +1,7 @@
 # 2027 Training Calendar
 
-Open `index.html` in any browser, or visit the GitHub Pages site once it is turned on:
-https://turmanat0r.github.io/Training-calendar-/
+Hosted on Vercel: https://training-calendar.vercel.app
+
+- `index.html` is the calendar page.
+- `api/events.js` stores the course dates in a Vercel Blob store so every device sees the same calendar.
+- Changing the calendar needs the passcode set in the `CALENDAR_PASSCODE` environment variable.

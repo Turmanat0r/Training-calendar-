@@ -546,36 +546,29 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
   // ---------- data layer ----------
   function startRender(list){ events = list; if (!loaded){ loaded = true; const up = sorted().find(e=>e.end>=todayISO); if (up) cursor = new Date(parse(up.start).getFullYear(), view==="year"?0:parse(up.start).getMonth(), 1); } render(); }
 
-  const API = "https://hcoiwhdvecbsvkpanvkc.supabase.co/rest/v1";
-  const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhjb2l3aGR2ZWNic3ZrcGFudmtjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MTc2MTUsImV4cCI6MjEwNjA5MzYxNX0.K6QVpCPSgNM3zD1h8iCrj4dGUrViCpHefNRibSFm5uQ";
-  const HDR = { apikey: KEY, Authorization: "Bearer " + KEY, "Content-Type": "application/json" };
   const CACHE = "tc.cache", PASS = "tc.passcode";
   const lsGet = k => { try { return localStorage.getItem(k); } catch(e){ return null; } };
   const lsSet = (k,v) => { try { v===null ? localStorage.removeItem(k) : localStorage.setItem(k,v); } catch(e){} };
-  const fromRow = r => ({ id: r.id, title: r.title, start: r.start_date, end: r.end_date, notes: r.notes || "" });
 
-  async function api(path, opts){
+  async function api(method, body){
     let res;
-    try { res = await fetch(API + path, { ...opts, headers: HDR, cache: "no-store" }); }
+    try { res = await fetch("/api/events", { method, cache: "no-store", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); }
     catch(e){ throw { code: "offline" }; }
-    if (!res.ok){
-      let body = {}; try { body = await res.json(); } catch(e){}
-      if (body.code === "28P01" || /passcode/.test(body.message||"")) throw { code: "passcode" };
-      throw { code: "server", status: res.status, message: body.message };
-    }
-    return res.status === 204 ? null : res.json().catch(()=>null);
+    let data = null; try { data = await res.json(); } catch(e){}
+    if (res.status === 401) throw { code: "passcode" };
+    if (!res.ok) throw { code: (data && data.error) || "server" };
+    return data;
   }
 
   let lastSig = "";
   async function refresh(){
     try {
-      const rows = await api("/training_events?select=id,title,start_date,end_date,notes&order=start_date");
-      const list = rows.map(fromRow), sig = JSON.stringify(list);
+      const list = await api("GET"), sig = JSON.stringify(list);
       lsSet(CACHE, sig);
       setStatus("live", "Synced " + new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}));
       if (sig !== lastSig || !loaded){ lastSig = sig; startRender(list); }
     } catch(e){
-      setStatus("warn", e.code==="offline" ? "Offline. Showing the last synced copy." : "Can't reach the calendar right now. Showing the last synced copy.");
+      setStatus("warn", e.code==="offline" ? "Offline. Showing the last synced copy." : e.code==="storage_missing" ? "Storage isn't connected yet." : "Can't reach the calendar right now. Showing the last synced copy.");
       if (!loaded){ let c = []; try { c = JSON.parse(lsGet(CACHE)||"[]"); } catch(x){} startRender(c); }
     }
   }
@@ -601,13 +594,11 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
     }
     throw { code: "passcode" };
   }
-  const rpc = (name, body) => api("/rpc/" + name, { method: "POST", body: JSON.stringify(body) });
-  const saveRow = (id, d) => withPass(p => rpc("training_save_event", { p_passcode: p, p_id: id, p_title: d.title, p_start: d.start, p_end: d.end, p_notes: d.notes || "" }));
-
+  const apply = list => { const sig = JSON.stringify(list); lastSig = sig; lsSet(CACHE, sig); startRender(list); };
   store = {
-    add: async d => { await saveRow(null, d); await refresh(); },
-    save: async (id, d) => { await saveRow(id, d); await refresh(); },
-    remove: async id => { await withPass(p => rpc("training_delete_event", { p_passcode: p, p_id: id })); await refresh(); },
+    add: async d => apply(await withPass(p => api("POST", { passcode: p, action: "save", event: d }))),
+    save: async (id, d) => apply(await withPass(p => api("POST", { passcode: p, action: "save", id, event: d }))),
+    remove: async id => apply(await withPass(p => api("POST", { passcode: p, action: "delete", id }))),
   };
 
   render();
