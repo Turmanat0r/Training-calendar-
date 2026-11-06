@@ -51,6 +51,7 @@ function clean(ev) {
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    if (req.method === "GET") return res.status(200).json(SEED);
     return res.status(503).json({ error: "storage_missing", message: "Connect a Blob store to this project in Vercel." });
   }
   try {

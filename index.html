@@ -503,6 +503,7 @@ dialog h2{font-family:var(--f-display);font-size:24px;margin:0}
     if (c==="cancelled") return "Not saved. A passcode is needed to change the calendar.";
     if (c==="passcode") return "That passcode didn't work, so nothing was changed.";
     if (c==="offline") return "You're offline. Reconnect and try again.";
+    if (c==="storage_missing") return "Saving isn't switched on yet. Connect a Blob store to the project in Vercel.";
     return "Couldn't save right now. Try again in a moment.";
   }
 
